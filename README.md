@@ -1,25 +1,18 @@
 # Minecraft Mod Porting Toolkit
 
-**Simplest mod porting ever:** Load JAR → Pick version → Get ported JAR
+**One-click mod porting:** Load JAR → Pick version → Get ported JAR
 
-## Installation
+## ⚡ Quick Start
 
-### Requirements
-- Python 3.10 or higher
-- pip
-
-### Setup (Windows)
-
+### Windows
 ```bash
-# Open Command Prompt and navigate to project folder
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 python run_app.py
 ```
 
-### Setup (macOS/Linux)
-
+### macOS/Linux
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -27,78 +20,68 @@ pip install -r requirements.txt
 python3 run_app.py
 ```
 
-## How to use
+## 🎮 How to use
 
-1. Click **"📁 Select JAR"** to load your mod
-2. The app auto-detects the Minecraft version (or you select it manually)
-3. Pick **Target version** from the dropdown
-4. Click **"🚀 Port mod"**
-5. Wait a few seconds
-6. Get your ported mod in the output folder
+1. Click **📁 Select JAR**
+2. Choose your mod file
+3. Select **Target version**
+4. Click **🚀 PORT MOD**
+5. Wait 10-30 seconds
+6. Get your ported mod in `output/` folder
 
-## Supported ports
+## ✅ Supported migrations
 
 ```
-1.7.10  → 1.12.2, 1.16.5, 1.20.1, 1.21.1
-1.12.2  → 1.16.5, 1.20.1, 1.21.1
-1.16.5  → 1.20.1, 1.21.1
-1.20.1  → 1.21.1
-1.21.1  → 26.4
+1.12.2 (Forge) → 1.20.1 (Forge)
+1.16.5 (Forge) → 1.20.1 (Forge)
+1.20.1 (Forge) → 1.21.1 (Forge)
 ```
 
-## What happens during porting
+## 📦 What the porter does
 
-- Extracts your JAR
-- Applies known API replacements (class names, method calls)
-- Updates resource files (.json, .properties, .xml)
-- Repackages as new JAR
-- Generates detailed porting report
+✓ Extracts your JAR  
+✓ Updates mod metadata (mcmod.info, mods.toml)  
+✓ Applies Forge API replacements (classes, packages)  
+✓ Updates resource files  
+✓ Repackages as new JAR  
+✓ Generates detailed report  
 
-## Output files
+## 📂 Output files
 
-In your output folder you'll find:
-- `ported_[modname]_v[version].jar` — Your ported mod (ready to use)
-- `porting_report.json` — Detailed list of what was changed
+In your output folder:
+- `ported_[modname]_v[version].jar` — Your ported mod (ready to play)
+- `porting_report.json` — Detailed porting log
 
-## Optional: AI assistance
+## ⚠️ Important
 
-Enable "AI suggestions" checkbox if you have Groq API:
+- **Test the mod before playing** - Some complex mods may need manual fixes
+- **Backup original JAR** - Keep the original file
+- **Check the report** - Review what was changed
+- **Complex mods** may require additional development work
 
-```bash
-# Set environment variable
-export GROQ_API_KEY="your_key_here"
-```
-
-On Windows:
-```powershell
-$env:GROQ_API_KEY="your_key_here"
-```
-
-Then restart the app.
-
-## Troubleshooting
-
-**App won't start:**
-```bash
-pip install --upgrade PySide6 requests
-```
-
-**JAR not recognized:**
-- Make sure it's a valid mod JAR (not corrupted)
-- Try selecting source version manually
-
-**Port failed:**
-- Check porting_report.json for details
-- Some complex mods may need manual fixes after porting
-
-## Building as EXE (Windows)
+## 🔧 Build as EXE (Windows)
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name "ModPorter" run_app.py
+pyinstaller --onefile --windowed --name ModPorter run_app.py
 ```
 
-Your EXE will be in `dist/ModPorter.exe`
+EXE will be in `dist/ModPorter.exe`
+
+## 📋 Troubleshooting
+
+**"JAR not valid" error:**
+- Make sure it's a real mod JAR
+- Try re-downloading the mod
+
+**"Mod needs Forge X.X.X" after porting:**
+- The metadata wasn't fully updated
+- Edit porting_report.json and check what went wrong
+
+**Mod crashes in-game:**
+- Some mods need code changes beyond bytecode replacement
+- Check Minecraft logs for specific errors
+- May need to decompile and manually adjust
 
 ## License
 
