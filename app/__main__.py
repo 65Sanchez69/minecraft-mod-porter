@@ -3,14 +3,14 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 
-def main() -> int:
+def main() -> None:
     from app.ui import ModPorterWindow
 
     app = QApplication([])
     window = ModPorterWindow()
     window.show()
-    return app.exec()
+    app.exec()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
