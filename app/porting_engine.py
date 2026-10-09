@@ -1,179 +1,158 @@
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
 
 from app.ai_client import AIClient
 
 
-class VersionMapping:
-    """Simple version-translation table for known Forge compatibility edits."""
+class PortingRules:
+    """API replacement rules for different version migrations."""
 
-    def __init__(self) -> None:
-        self.rules = {
-            ("1.7.10", "1.20.1"): {
-                "net.minecraftforge.fml.common.registry.GameRegistry": "net.minecraftforge.registries.ForgeRegistries",
-                "GameRegistry.register": "Registry.register",
-                "Minecraft.getMinecraft()": "Minecraft.getInstance()",
-                "IRecipe": "RecipeHolder",
-                "EntityPlayer": "Player",
-            },
-            ("1.12.2", "1.21.1"): {
-                "net.minecraftforge.fml.common.registry.GameRegistry": "net.minecraftforge.registries.ForgeRegistries",
-                "GameRegistry.register": "Registry.register",
-                "Minecraft.getMinecraft()": "Minecraft.getInstance()",
-                "EntityPlayerMP": "ServerPlayer",
-                "WorldServer": "ServerLevel",
-                "BlockPos": "BlockPos",
-            },
-            ("1.21.1", "26.4"): {
-                "net.minecraftforge.fml.common.registry.GameRegistry": "net.minecraftforge.registries.ForgeRegistries",
-                "@Mod.EventBusSubscriber": "@Mod.EventBusSubscriber(bus = Mod.EventBusSubscriber.Bus.MOD)",
-                "KeyBinding": "KeyMapping",
-                "GuiContainer": "AbstractContainerScreen",
-            },
-        }
-
-    def get_rules(self, source_version: str, target_version: str) -> Dict[str, str]:
-        return self.rules.get((source_version, target_version), {})
-
-
-def apply_known_replacements(content: str, rules: Dict[str, str]) -> str:
-    updated = content
-    for old, new in rules.items():
-        updated = updated.replace(old, new)
-    return updated
-
-
-def find_java_files(root_dir: str) -> List[Path]:
-    base = Path(root_dir)
-    if not base.exists():
-        return []
-    return sorted(base.rglob("*.java"))
-
-
-def create_gradle_files(output_dir: Path, target_version: str) -> None:
-    settings = """\
-pluginManagement {
-    repositories {
-        gradlePluginPortal()
-        mavenCentral()
-        maven { url = uri(\"https://maven.minecraftforge.net/\") }
+    RULES = {
+        ("1.7.10", "1.12.2"): {
+            "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
+            "GameRegistry.registerItem": "ForgeRegistries.ITEMS.register",
+            "GameRegistry.registerBlock": "ForgeRegistries.BLOCKS.register",
+            "Minecraft.getMinecraft()": "Minecraft.getInstance()",
+        },
+        ("1.7.10", "1.16.5"): {
+            "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
+            "GameRegistry.registerItem": "ForgeRegistries.ITEMS.register",
+            "GameRegistry.registerBlock": "ForgeRegistries.BLOCKS.register",
+            "Minecraft.getMinecraft()": "Minecraft.getInstance()",
+            "EntityPlayer": "PlayerEntity",
+            "Entity": "Entity",
+        },
+        ("1.7.10", "1.20.1"): {
+            "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
+            "EntityPlayer": "Player",
+            "EntityPlayerMP": "ServerPlayer",
+            "WorldServer": "ServerLevel",
+            "Minecraft.getMinecraft()": "Minecraft.getInstance()",
+        },
+        ("1.12.2", "1.16.5"): {
+            "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
+            "EntityPlayer": "PlayerEntity",
+            "EntityPlayerMP": "ServerPlayerEntity",
+            "WorldServer": "ServerWorld",
+        },
+        ("1.12.2", "1.20.1"): {
+            "EntityPlayer": "Player",
+            "EntityPlayerMP": "ServerPlayer",
+            "WorldServer": "ServerLevel",
+            "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
+        },
+        ("1.16.5", "1.20.1"): {
+            "net/minecraftforge/fml/common/registry/ForgeRegistries": "net/minecraftforge/registries/ForgeRegistries",
+            "ServerPlayerEntity": "ServerPlayer",
+            "PlayerEntity": "Player",
+            "ServerWorld": "ServerLevel",
+        },
+        ("1.20.1", "1.21.1"): {
+            "net/minecraft/world/level/block/entity/BlockEntity": "net/minecraft/world/level/block/entity/BlockEntity",
+            "GuiScreen": "Screen",
+        },
+        ("1.21.1", "26.4"): {
+            "@Mod.EventBusSubscriber": "@Mod.EventBusSubscriber",
+            "GuiContainer": "AbstractContainerScreen",
+        },
     }
-}
 
-rootProject.name = \"ported_mod\"
-"""
-
-    build_gradle = f"""\
-plugins {{
-    id 'java'
-    id 'net.minecraftforge.gradle' version '6.0.+' 
-}}
-
-version = '1.0.0'
-group = 'com.example.portedmod'
-
-java {{
-    toolchain {{
-        languageVersion = JavaLanguageVersion.of(17)
-    }}
-}}
-
-minecraft {{
-    mappings channel = 'official', version = '{target_version}'
-}}
-
-repositories {{
-    mavenCentral()
-    maven { url = uri('https://maven.minecraftforge.net/') }
-}}
-
-dependencies {{
-    minecraft 'net.minecraftforge:forge:{target_version}-forge'
-}}
-
-tasks.withType(JavaCompile).configureEach {{
-    options.encoding = 'UTF-8'
-}}
-"""
-
-    (output_dir / "settings.gradle").write_text(settings, encoding="utf-8")
-    (output_dir / "build.gradle").write_text(build_gradle, encoding="utf-8")
+    @classmethod
+    def get_rules(cls, source: str, target: str) -> Dict[str, str]:
+        return cls.RULES.get((source, target), {})
 
 
-class PortingEngine:
-    """A practical MVP engine for source code porting and output packaging."""
+class JarPorter:
+    """Port compiled JAR mods between Minecraft/Forge versions."""
 
     def __init__(self) -> None:
-        self.mapping = VersionMapping()
+        self.ai_client: Optional[AIClient] = None
+        self.porting_rules = PortingRules()
 
-    def port_mod(self, source_dir: str, source_version: str, target_version: str, output_dir: str, ai_enabled: bool = False, ai_key: str = None) -> Dict[str, object]:
-        source_path = Path(source_dir)
+    def enable_ai(self, api_key: Optional[str] = None) -> None:
+        self.ai_client = AIClient(api_key=api_key)
+
+    def port_jar(
+        self,
+        jar_path: str,
+        source_version: str,
+        target_version: str,
+        output_dir: str,
+    ) -> Dict[str, object]:
+        """Port a JAR file from source to target Forge version."""
+        jar_file = Path(jar_path)
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        if not source_path.exists():
-            raise FileNotFoundError(f"Source directory not found: {source_dir}")
+        if not jar_file.exists():
+            raise FileNotFoundError(f"JAR not found: {jar_path}")
 
-        java_files = find_java_files(source_dir)
-        if not java_files:
-            raise FileNotFoundError("No .java files were found in the selected source directory.")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
 
-        result_files: List[Dict[str, str]] = []
-        detections: List[str] = []
-        ai_results: List[Dict[str, str]] = []
+            extract_path = tmp_path / "extracted"
+            extract_path.mkdir()
 
-        rules = self.mapping.get_rules(source_version, target_version)
-        if not rules:
-            detections.append(f"No direct mapping table found for {source_version} -> {target_version}. The app will still copy files and run a generic analysis.")
+            with zipfile.ZipFile(jar_file, "r") as zf:
+                zf.extractall(extract_path)
 
-        for java_file in java_files:
-            relative = java_file.relative_to(source_path)
-            patched_path = output_path / "ported_mod" / "src" / relative
-            patched_path.parent.mkdir(parents=True, exist_ok=True)
+            # Apply rules
+            rules = self.porting_rules.get_rules(source_version, target_version)
+            detections = []
+            ai_results = []
 
-            content = java_file.read_text(encoding="utf-8", errors="ignore")
-            patched_content = apply_known_replacements(content, rules)
+            # Process class files
+            class_files = list(extract_path.rglob("*.class"))
+            patched_count = 0
 
-            if patched_content != content:
-                detections.append(f"Applied replacement rules to {relative.as_posix()}")
+            for class_file in class_files:
+                try:
+                    content = class_file.read_bytes()
+                    original_content = content
 
-            if ai_enabled:
-                ai_client = AIClient(api_key=ai_key)
-                suggestion = ai_client.generate_patch(java_file.name, patched_content, source_version, target_version)
-                patched_content += "\n\n/*\nAI porting suggestion:\n" + suggestion + "\n*/\n"
-                ai_results.append({"file": relative.as_posix(), "summary": suggestion[:160]})
+                    # Apply string replacements in bytecode
+                    for old, new in rules.items():
+                        content = content.replace(old.encode(), new.encode())
 
-            patched_path.write_text(patched_content, encoding="utf-8")
-            result_files.append({"source": str(java_file), "output": str(patched_path)})
+                    if content != original_content:
+                        class_file.write_bytes(content)
+                        patched_count += 1
+                        rel_path = class_file.relative_to(extract_path).as_posix()
+                        detections.append(f"Patched: {rel_path}")
+                except Exception as e:
+                    detections.append(f"Warning: Could not patch {class_file.name}: {str(e)[:100]}")
 
-        create_gradle_files(output_path, target_version)
+            # Create output JAR
+            output_jar = output_path / f"ported_mod_v{target_version}.jar"
+            with zipfile.ZipFile(output_jar, "w", zipfile.ZIP_DEFLATED) as zf_out:
+                for file in extract_path.rglob("*"):
+                    if file.is_file():
+                        zf_out.write(file, file.relative_to(extract_path))
 
-        report = {
-            "source_version": source_version,
-            "target_version": target_version,
-            "source_dir": source_dir,
-            "output_dir": str(output_path),
-            "java_files_total": len(java_files),
-            "detections": detections,
-            "ai_results": ai_results,
-            "completed": True,
-        }
+            # Create report
+            report = {
+                "source_version": source_version,
+                "target_version": target_version,
+                "input_jar": str(jar_file),
+                "output_jar": str(output_jar),
+                "class_files_processed": len(class_files),
+                "class_files_patched": patched_count,
+                "detections": detections,
+                "ai_results": ai_results,
+                "status": "completed",
+            }
 
-        report_path = output_path / "porting_report.json"
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-
-        jar_path = output_path / "ported_mod.jar"
-        with zipfile.ZipFile(jar_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for file in output_path.rglob("*"):
-                if file.is_file() and file.name != jar_path.name:
-                    archive.write(file, file.relative_to(output_path))
+            report_path = output_path / "porting_report.json"
+            report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
         return {
+            "jar_path": str(output_jar),
             "report": report,
-            "jar_path": str(jar_path),
             "output_dir": str(output_path),
-            "result_files": result_files,
         }

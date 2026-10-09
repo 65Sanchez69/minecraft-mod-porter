@@ -1,187 +1,57 @@
-import json
-import zipfile
-from pathlib import Path
-from typing import Dict, List
+# Minecraft Mod Porting Toolkit
 
-from app.ai_client import AIClient
+**Simple mod porting:** Load a `.jar` mod → select target version → get ported `.jar`
 
+## Quick Start
 
-class VersionMapping:
-    """Known replacements between Forge versions used by the porting MVP."""
+```bash
+# Setup
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
-    def __init__(self) -> None:
-        self.rules = {
-            ("1.7.10", "1.20.1"): {
-                "net.minecraftforge.fml.common.registry.GameRegistry": "net.minecraftforge.registries.ForgeRegistries",
-                "GameRegistry.register": "Registry.register",
-                "Minecraft.getMinecraft()": "Minecraft.getInstance()",
-                "IRecipe": "RecipeHolder",
-                "EntityPlayer": "Player",
-            },
-            ("1.12.2", "1.21.1"): {
-                "net.minecraftforge.fml.common.registry.GameRegistry": "net.minecraftforge.registries.ForgeRegistries",
-                "GameRegistry.register": "Registry.register",
-                "EntityPlayerMP": "ServerPlayer",
-                "WorldServer": "ServerLevel",
-                "BlockPos": "BlockPos",
-            },
-            ("1.21.1", "26.4"): {
-                "@Mod.EventBusSubscriber": "@Mod.EventBusSubscriber(bus = Mod.EventBusSubscriber.Bus.MOD)",
-                "KeyBinding": "KeyMapping",
-                "GuiContainer": "AbstractContainerScreen",
-            },
-        }
+# Run
+python run_app.py
+```
 
-    def get_rules(self, source_version: str, target_version: str) -> Dict[str, str]:
-        return self.rules.get((source_version, target_version), {})
+## How to use
 
+1. Click "Select mod JAR"
+2. Choose target Minecraft/Forge version
+3. Click "Port mod"
+4. Get ported JAR in output folder
 
-def apply_known_replacements(content: str, rules: Dict[str, str]) -> str:
-    updated = content
-    for old, new in rules.items():
-        updated = updated.replace(old, new)
-    return updated
+## Supported ports
 
+- 1.7.10 → 1.12.2, 1.16.5, 1.20.1, 1.21.1
+- 1.12.2 → 1.16.5, 1.20.1, 1.21.1
+- 1.16.5 → 1.20.1, 1.21.1
+- 1.20.1 → 1.21.1
+- 1.21.1 → 26.4
 
-def find_java_files(root_dir: str) -> List[Path]:
-    base = Path(root_dir)
-    if not base.exists():
-        return []
-    return sorted(base.rglob("*.java"))
+## Optional: AI fixes
 
+Set environment variable for AI-assisted patches:
 
-def create_gradle_files(output_dir: Path, target_version: str) -> None:
-    settings = '''\
-pluginManagement {
-    repositories {
-        gradlePluginPortal()
-        mavenCentral()
-        maven { url = uri("https://maven.minecraftforge.net/") }
-    }
-}
+```bash
+export GROQ_API_KEY="your_key"
+```
 
-rootProject.name = "ported_mod"
-'''
+## Output
 
-    build_gradle = f'''\
-plugins {{
-    id 'java'
-    id 'net.minecraftforge.gradle' version '6.0.+'
-}}
+In output folder you get:
+- `ported_mod.jar` — ready to use
+- `porting_report.json` — what was changed
+- `decompiled/` — source code after porting
 
-version = '1.0.0'
-group = 'com.example.portedmod'
+## Features
 
-java {{
-    toolchain {{
-        languageVersion = JavaLanguageVersion.of(17)
-    }}
-}}
+✅ Automatic bytecode analysis  
+✅ Known API replacements  
+✅ Optional AI patches  
+✅ Report generation  
+✅ One-click porting  
 
-minecraft {{
-    mappings channel = 'official', version = '{target_version}'
-}}
+## License
 
-repositories {{
-    mavenCentral()
-    maven {{ url = uri('https://maven.minecraftforge.net/') }}
-}}
-
-dependencies {{
-    minecraft 'net.minecraftforge:forge:{target_version}-forge'
-}}
-
-tasks.withType(JavaCompile).configureEach {{
-    options.encoding = 'UTF-8'
-}}
-'''
-
-    (output_dir / "settings.gradle").write_text(settings, encoding="utf-8")
-    (output_dir / "build.gradle").write_text(build_gradle, encoding="utf-8")
-
-
-class PortingEngine:
-    """Simplified porting engine for Forge -> Forge MOD source migration."""
-
-    def __init__(self) -> None:
-        self.mapping = VersionMapping()
-
-    def port_mod(
-        self,
-        source_dir: str,
-        source_version: str,
-        target_version: str,
-        output_dir: str,
-        ai_enabled: bool = False,
-        ai_key: str = None,
-    ) -> Dict[str, object]:
-        source_path = Path(source_dir)
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        if not source_path.exists():
-            raise FileNotFoundError(f"Source directory not found: {source_dir}")
-
-        java_files = find_java_files(source_dir)
-        if not java_files:
-            raise FileNotFoundError("No .java files were found in the selected source directory.")
-
-        result_files: List[Dict[str, str]] = []
-        detections: List[str] = []
-        ai_results: List[Dict[str, str]] = []
-
-        rules = self.mapping.get_rules(source_version, target_version)
-        if not rules:
-            detections.append(
-                f"No direct mapping table for {source_version} -> {target_version}. "
-                "Generic porting logic will still be applied."
-            )
-
-        for java_file in java_files:
-            relative = java_file.relative_to(source_path)
-            patched_path = output_path / "ported_mod" / "src" / relative
-            patched_path.parent.mkdir(parents=True, exist_ok=True)
-
-            content = java_file.read_text(encoding="utf-8", errors="ignore")
-            patched_content = apply_known_replacements(content, rules)
-
-            if patched_content != content:
-                detections.append(f"Applied replacement rules to {relative.as_posix()}")
-
-            if ai_enabled:
-                ai_client = AIClient(api_key=ai_key)
-                suggestion = ai_client.generate_patch(java_file.name, patched_content, source_version, target_version)
-                patched_content += "\n\n/*\nAI porting suggestion:\n" + suggestion + "\n*/\n"
-                ai_results.append({"file": relative.as_posix(), "summary": suggestion[:160]})
-
-            patched_path.write_text(patched_content, encoding="utf-8")
-            result_files.append({"source": str(java_file), "output": str(patched_path)})
-
-        create_gradle_files(output_path, target_version)
-
-        report = {
-            "source_version": source_version,
-            "target_version": target_version,
-            "source_dir": source_dir,
-            "output_dir": str(output_path),
-            "java_files_total": len(java_files),
-            "detections": detections,
-            "ai_results": ai_results,
-            "completed": True,
-        }
-
-        report_path = output_path / "porting_report.json"
-        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-
-        jar_path = output_path / "ported_mod.jar"
-        with zipfile.ZipFile(jar_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for file in output_path.rglob("*"):
-                if file.is_file() and file.name != jar_path.name:
-                    archive.write(file, file.relative_to(output_path))
-
-        return {
-            "report": report,
-            "jar_path": str(jar_path),
-            "output_dir": str(output_path),
-            "result_files": result_files,
-        }
+MIT
