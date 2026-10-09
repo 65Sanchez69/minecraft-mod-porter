@@ -3,10 +3,11 @@ from typing import Optional
 
 
 class AIClient:
-    """Groq API client for optional AI patches."""
+    """Optional Groq API client for AI-assisted patches."""
 
     def __init__(self, api_key: Optional[str] = None) -> None:
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        self.enabled = bool(self.api_key)
 
     def is_available(self) -> bool:
-        return bool(self.api_key)
+        return self.enabled

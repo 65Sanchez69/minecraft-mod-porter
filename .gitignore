@@ -3,10 +3,12 @@ __pycache__/
 *.pyo
 *.egg-info/
 .venv/
+.env
 .idea/
 .vscode/
 .DS_Store
 build/
 dist/
 *.jar
-*.zip
+output/
+*.spec

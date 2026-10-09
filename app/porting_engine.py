@@ -1,7 +1,5 @@
 import json
 import os
-import shutil
-import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
@@ -11,29 +9,31 @@ from app.ai_client import AIClient
 
 
 class PortingRules:
-    """API replacement rules for different version migrations."""
+    """API replacement rules for Forge version migrations."""
 
     RULES = {
         ("1.7.10", "1.12.2"): {
             "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
-            "GameRegistry.registerItem": "ForgeRegistries.ITEMS.register",
-            "GameRegistry.registerBlock": "ForgeRegistries.BLOCKS.register",
-            "Minecraft.getMinecraft()": "Minecraft.getInstance()",
+            "GameRegistry": "ForgeRegistries",
+            "Minecraft/getMinecraft": "Minecraft/getInstance",
         },
         ("1.7.10", "1.16.5"): {
             "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
-            "GameRegistry.registerItem": "ForgeRegistries.ITEMS.register",
-            "GameRegistry.registerBlock": "ForgeRegistries.BLOCKS.register",
-            "Minecraft.getMinecraft()": "Minecraft.getInstance()",
             "EntityPlayer": "PlayerEntity",
-            "Entity": "Entity",
+            "EntityPlayerMP": "ServerPlayerEntity",
+            "WorldServer": "ServerWorld",
         },
         ("1.7.10", "1.20.1"): {
             "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
             "EntityPlayer": "Player",
             "EntityPlayerMP": "ServerPlayer",
             "WorldServer": "ServerLevel",
-            "Minecraft.getMinecraft()": "Minecraft.getInstance()",
+        },
+        ("1.7.10", "1.21.1"): {
+            "EntityPlayer": "Player",
+            "EntityPlayerMP": "ServerPlayer",
+            "WorldServer": "ServerLevel",
+            "World": "Level",
         },
         ("1.12.2", "1.16.5"): {
             "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
@@ -45,21 +45,31 @@ class PortingRules:
             "EntityPlayer": "Player",
             "EntityPlayerMP": "ServerPlayer",
             "WorldServer": "ServerLevel",
-            "net/minecraftforge/fml/common/registry/GameRegistry": "net/minecraftforge/registries/ForgeRegistries",
+        },
+        ("1.12.2", "1.21.1"): {
+            "EntityPlayer": "Player",
+            "EntityPlayerMP": "ServerPlayer",
+            "World": "Level",
+            "WorldServer": "ServerLevel",
         },
         ("1.16.5", "1.20.1"): {
-            "net/minecraftforge/fml/common/registry/ForgeRegistries": "net/minecraftforge/registries/ForgeRegistries",
             "ServerPlayerEntity": "ServerPlayer",
             "PlayerEntity": "Player",
             "ServerWorld": "ServerLevel",
         },
+        ("1.16.5", "1.21.1"): {
+            "ServerPlayerEntity": "ServerPlayer",
+            "PlayerEntity": "Player",
+            "World": "Level",
+            "ServerWorld": "ServerLevel",
+        },
         ("1.20.1", "1.21.1"): {
-            "net/minecraft/world/level/block/entity/BlockEntity": "net/minecraft/world/level/block/entity/BlockEntity",
             "GuiScreen": "Screen",
+            "Container": "AbstractContainerMenu",
         },
         ("1.21.1", "26.4"): {
-            "@Mod.EventBusSubscriber": "@Mod.EventBusSubscriber",
-            "GuiContainer": "AbstractContainerScreen",
+            "Screen": "Screen",
+            "AbstractContainerMenu": "AbstractContainerMenu",
         },
     }
 
@@ -72,11 +82,8 @@ class JarPorter:
     """Port compiled JAR mods between Minecraft/Forge versions."""
 
     def __init__(self) -> None:
-        self.ai_client: Optional[AIClient] = None
         self.porting_rules = PortingRules()
-
-    def enable_ai(self, api_key: Optional[str] = None) -> None:
-        self.ai_client = AIClient(api_key=api_key)
+        self.ai_client: Optional[AIClient] = None
 
     def port_jar(
         self,
@@ -84,6 +91,7 @@ class JarPorter:
         source_version: str,
         target_version: str,
         output_dir: str,
+        ai_enabled: bool = False,
     ) -> Dict[str, object]:
         """Port a JAR file from source to target Forge version."""
         jar_file = Path(jar_path)
@@ -93,57 +101,76 @@ class JarPorter:
         if not jar_file.exists():
             raise FileNotFoundError(f"JAR not found: {jar_path}")
 
+        if not jar_file.suffix.lower() == ".jar":
+            raise ValueError(f"File is not a JAR: {jar_path}")
+
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-
             extract_path = tmp_path / "extracted"
             extract_path.mkdir()
 
-            with zipfile.ZipFile(jar_file, "r") as zf:
-                zf.extractall(extract_path)
+            try:
+                with zipfile.ZipFile(jar_file, "r") as zf:
+                    zf.extractall(extract_path)
+            except zipfile.BadZipFile:
+                raise ValueError(f"Invalid JAR file: {jar_path}")
 
-            # Apply rules
             rules = self.porting_rules.get_rules(source_version, target_version)
-            detections = []
-            ai_results = []
-
-            # Process class files
-            class_files = list(extract_path.rglob("*.class"))
+            detections: List[str] = []
+            ai_results: List[Dict[str, str]] = []
             patched_count = 0
+
+            class_files = list(extract_path.rglob("*.class"))
 
             for class_file in class_files:
                 try:
                     content = class_file.read_bytes()
-                    original_content = content
+                    original_size = len(content)
 
-                    # Apply string replacements in bytecode
                     for old, new in rules.items():
-                        content = content.replace(old.encode(), new.encode())
+                        content = content.replace(old.encode("utf-8", errors="ignore"), new.encode("utf-8", errors="ignore"))
 
-                    if content != original_content:
+                    if len(content) != original_size or content != class_file.read_bytes():
                         class_file.write_bytes(content)
                         patched_count += 1
                         rel_path = class_file.relative_to(extract_path).as_posix()
                         detections.append(f"Patched: {rel_path}")
                 except Exception as e:
-                    detections.append(f"Warning: Could not patch {class_file.name}: {str(e)[:100]}")
+                    detections.append(f"Warning: {class_file.name}: {str(e)[:80]}")
 
-            # Create output JAR
-            output_jar = output_path / f"ported_mod_v{target_version}.jar"
+            resource_files = list(extract_path.rglob("*.properties")) + list(extract_path.rglob("*.json")) + list(
+                extract_path.rglob("*.xml")
+            )
+            for res_file in resource_files:
+                try:
+                    content = res_file.read_text(encoding="utf-8", errors="ignore")
+                    original = content
+
+                    for old, new in rules.items():
+                        content = content.replace(old, new)
+
+                    if content != original:
+                        res_file.write_text(content, encoding="utf-8")
+                        rel_path = res_file.relative_to(extract_path).as_posix()
+                        detections.append(f"Updated resource: {rel_path}")
+                except Exception as e:
+                    detections.append(f"Warning (resource): {res_file.name}: {str(e)[:80]}")
+
+            output_jar = output_path / f"ported_{Path(jar_file.name).stem}_v{target_version}.jar"
             with zipfile.ZipFile(output_jar, "w", zipfile.ZIP_DEFLATED) as zf_out:
                 for file in extract_path.rglob("*"):
                     if file.is_file():
                         zf_out.write(file, file.relative_to(extract_path))
 
-            # Create report
             report = {
                 "source_version": source_version,
                 "target_version": target_version,
-                "input_jar": str(jar_file),
-                "output_jar": str(output_jar),
+                "input_jar": jar_file.name,
+                "output_jar": output_jar.name,
                 "class_files_processed": len(class_files),
                 "class_files_patched": patched_count,
-                "detections": detections,
+                "resource_files_checked": len(resource_files),
+                "detections": detections[:50],
                 "ai_results": ai_results,
                 "status": "completed",
             }
