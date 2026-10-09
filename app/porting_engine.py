@@ -3,108 +3,83 @@ import re
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
-class ModMetadataEditor:
-    """Parse and edit mod metadata files (mcmod.info, mods.toml, etc)."""
+class IndustrialCraftRules:
+    """Dedicated migration rules for IndustrialCraft-like Forge mods."""
 
-    @staticmethod
-    def find_metadata_file(extract_path: Path) -> Optional[Path]:
-        """Find mcmod.info or mods.toml."""
-        for name in ["mcmod.info", "mods.toml", "META-INF/MANIFEST.MF"]:
-            file_path = extract_path / name
-            if file_path.exists():
-                return file_path
-        return None
+    # Core replacements used in many IC2/IndustrialCraft mods
+    IC2_RULES = [
+        (b"net/minecraftforge/fml/common/registry/GameRegistry", b"net/minecraftforge/registries/ForgeRegistries"),
+        (b"net/minecraft/item/ItemStack", b"net/minecraft/world/item/ItemStack"),
+        (b"net/minecraft/entity/player/EntityPlayer", b"net/minecraft/world/entity/player/Player"),
+        (b"net/minecraft/entity/player/EntityPlayerMP", b"net/minecraft/server/level/ServerPlayer"),
+        (b"net/minecraft/world/World", b"net/minecraft/world/level/Level"),
+        (b"net/minecraft/world/WorldServer", b"net/minecraft/server/level/ServerLevel"),
+        (b"net/minecraft/util/math/BlockPos", b"net/minecraft/core/BlockPos"),
+        (b"net/minecraft/tileentity/TileEntity", b"net/minecraft/world/level/block/entity/BlockEntity"),
+        (b"net/minecraft/inventory/Container", b"net/minecraft/world/inventory/AbstractContainerMenu"),
+        (b"net/minecraft/client/gui/GuiScreen", b"net/minecraft/client/gui/screens/Screen"),
+        (b"net/minecraft/block/Block", b"net/minecraft/world/level/block/Block"),
+        (b"net/minecraft/item/Item", b"net/minecraft/world/item/Item"),
+        (b"net/minecraftforge/fml/common/eventhandler/Event", b"net/minecraftforge/eventbus/api/Event"),
+        (b"net/minecraftforge/common/MinecraftForge", b"net/minecraftforge/common/MinecraftForge"),
+        (b"IC2", b"IC2"),
+    ]
 
-    @staticmethod
-    def update_mcmod_info(content: str, target_version: str) -> str:
-        """Update mcmod.info JSON metadata."""
-        try:
-            data = json.loads(content)
-            if isinstance(data, list):
-                for mod in data:
-                    if "mcversion" in mod:
-                        mod["mcversion"] = target_version
-            elif isinstance(data, dict):
-                if "mcversion" in data:
-                    data["mcversion"] = target_version
-            return json.dumps(data, indent=2)
-        except Exception:
-            return content
+
+class ForgeMetadataFixer:
+    """Fixes mcmod.info, mods.toml and Forge metadata."""
 
     @staticmethod
-    def update_mods_toml(content: str, target_version: str) -> str:
-        """Update mods.toml TOML metadata."""
-        # Update [[mods]] section mcversion
-        pattern = r'mcversion\s*=\s*["\'].*?["\']'
-        content = re.sub(pattern, f'mcversion = "{target_version}"', content)
-
-        # Update dependencies
-        pattern = r'("forge":"[0-9]+-[0-9]+\.[0-9]+\.[0-9]+)'
-        if target_version == "1.20.1":
-            content = re.sub(pattern, r'"forge":"47-0.0.0', content)
-        elif target_version == "1.21.1":
-            content = re.sub(pattern, r'"forge":"51-0.0.0', content)
-        elif target_version == "26.4":
-            content = re.sub(pattern, r'"forge":"52-0.0.0', content)
-
-        return content
-
-
-class BytecodeReplacer:
-    """Smart bytecode string replacement with proper encoding."""
-
-    # Comprehensive rules for common migrations
-    MIGRATION_RULES = {
-        ("1.12.2", "1.20.1"): [
-            # Package changes
-            (b"net/minecraftforge/fml/common/registry/", b"net/minecraftforge/registries/"),
-            (b"net/minecraft/entity/player/EntityPlayer", b"net/minecraft/world/entity/player/Player"),
-            (b"net/minecraft/entity/player/EntityPlayerMP", b"net/minecraft/server/level/ServerPlayer"),
-            (b"net/minecraft/world/WorldServer", b"net/minecraft/server/level/ServerLevel"),
-            (b"net/minecraft/world/World", b"net/minecraft/world/level/Level"),
-            (b"net/minecraft/client/gui/GuiScreen", b"net/minecraft/client/gui/screens/Screen"),
-            (b"net/minecraft/inventory/Container", b"net/minecraft/world/inventory/AbstractContainerMenu"),
-            (b"net/minecraft/tileentity/TileEntity", b"net/minecraft/world/level/block/entity/BlockEntity"),
-            (b"net/minecraft/block/Block", b"net/minecraft/world/level/block/Block"),
-            (b"net/minecraft/item/Item", b"net/minecraft/world/item/Item"),
-            # Common class name replacements
-            (b"EntityPlayer", b"Player"),
-            (b"EntityPlayerMP", b"ServerPlayer"),
-            (b"WorldServer", b"ServerLevel"),
-            (b"TileEntity", b"BlockEntity"),
-            (b"GuiScreen", b"Screen"),
-            (b"Container", b"AbstractContainerMenu"),
-            (b"ItemStack", b"ItemStack"),
-        ],
-        ("1.16.5", "1.20.1"): [
-            (b"net/minecraft/entity/player/ServerPlayerEntity", b"net/minecraft/server/level/ServerPlayer"),
-            (b"net/minecraft/entity/player/PlayerEntity", b"net/minecraft/world/entity/player/Player"),
-            (b"net/minecraft/world/server/ServerWorld", b"net/minecraft/server/level/ServerLevel"),
-            (b"net/minecraft/world/World", b"net/minecraft/world/level/Level"),
-            (b"net/minecraft/client/gui/screen/Screen", b"net/minecraft/client/gui/screens/Screen"),
-            (b"net/minecraft/inventory/container/Container", b"net/minecraft/world/inventory/AbstractContainerMenu"),
-            (b"net/minecraft/tileentity/TileEntity", b"net/minecraft/world/level/block/entity/BlockEntity"),
-            (b"ServerPlayerEntity", b"ServerPlayer"),
-            (b"PlayerEntity", b"Player"),
-            (b"ServerWorld", b"ServerLevel"),
-            (b"TileEntity", b"BlockEntity"),
-        ],
-        ("1.20.1", "1.21.1"): [
-            (b"net/minecraft/world/inventory/AbstractContainerMenu", b"net/minecraft/world/inventory/AbstractContainerMenu"),
-            (b"net/minecraft/client/gui/screens/Screen", b"net/minecraft/client/gui/screens/Screen"),
-            # Minimal changes between these versions
-        ],
-        ("1.21.1", "26.4"): [
-            # Future compatibility layer
-        ],
-    }
+    def find_mod_info_files(extract_path: Path) -> List[Path]:
+        files: List[Path] = []
+        for pattern in ["mcmod.info", "mods.toml", "META-INF/mods.toml", "META-INF/MANIFEST.MF"]:
+            files.extend(extract_path.rglob(pattern))
+        return files
 
     @staticmethod
-    def apply_rules(jar_path: str, source_version: str, target_version: str, output_dir: str) -> Dict[str, object]:
-        """Apply bytecode replacements to JAR."""
+    def fix_mod_metadata(extract_path: Path, target_version: str) -> List[str]:
+        warnings: List[str] = []
+
+        for meta_file in ForgeMetadataFixer.find_mod_info_files(extract_path):
+            try:
+                text = meta_file.read_text(encoding="utf-8", errors="ignore")
+                new_text = text
+
+                # Update mcmod.info JSON
+                try:
+                    obj = json.loads(text)
+                    if isinstance(obj, list):
+                        for item in obj:
+                            if isinstance(item, dict):
+                                item["mcversion"] = target_version
+                        new_text = json.dumps(obj, indent=2)
+                    elif isinstance(obj, dict):
+                        obj["mcversion"] = target_version
+                        new_text = json.dumps(obj, indent=2)
+                except Exception:
+                    pass
+
+                # Update mods.toml
+                new_text = re.sub(r'mcversion\s*=\s*"[^"]*"', f'mcversion = "{target_version}"', new_text)
+                new_text = re.sub(r'forge_version\s*=\s*"[^"]*"', f'forge_version = "{target_version}"', new_text)
+
+                if new_text != text:
+                    meta_file.write_text(new_text, encoding="utf-8")
+                    warnings.append(f"Updated metadata: {meta_file.relative_to(extract_path).as_posix()}")
+            except Exception as exc:
+                warnings.append(f"Could not update metadata {meta_file.name}: {str(exc)[:80]}")
+
+        return warnings
+
+
+class AppPortingEngine:
+    """Full porting engine with targeted industrial craft handling."""
+
+    @staticmethod
+    def port_jar(jar_path: str, source_version: str, target_version: str, output_dir: str) -> Dict[str, Any]:
         jar_file = Path(jar_path)
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -117,117 +92,80 @@ class BytecodeReplacer:
             extract_path = tmp_path / "extracted"
             extract_path.mkdir()
 
-            # Extract JAR
             try:
                 with zipfile.ZipFile(jar_file, "r") as zf:
                     zf.extractall(extract_path)
             except zipfile.BadZipFile:
-                raise ValueError(f"Invalid or corrupted JAR file: {jar_path}")
+                raise ValueError(f"Invalid JAR file: {jar_path}")
 
-            # Update metadata
-            metadata_file = ModMetadataEditor.find_metadata_file(extract_path)
-            if metadata_file:
-                try:
-                    content = metadata_file.read_text(encoding="utf-8")
-                    if metadata_file.name == "mcmod.info":
-                        updated = ModMetadataEditor.update_mcmod_info(content, target_version)
-                    elif metadata_file.name == "mods.toml":
-                        updated = ModMetadataEditor.update_mods_toml(content, target_version)
-                    else:
-                        updated = content
-                    metadata_file.write_text(updated, encoding="utf-8")
-                except Exception as e:
-                    print(f"Warning: Could not update metadata: {e}")
+            # Step 1: metadata fixes
+            metadata_warnings = ForgeMetadataFixer.fix_mod_metadata(extract_path, target_version)
 
-            # Get rules for this migration
-            rules = BytecodeReplacer.MIGRATION_RULES.get((source_version, target_version), [])
-
-            if not rules:
-                raise ValueError(
-                    f"No migration rules found for {source_version} -> {target_version}. "
-                    "This version combination may not be supported yet."
-                )
-
-            detections: List[str] = []
-            patched_count = 0
-
-            # Process class files
+            # Step 2: apply industrial craft relevant replacements
+            rules = IndustrialCraftRules.IC2_RULES
             class_files = list(extract_path.rglob("*.class"))
-            for class_file in class_files:
+            patched_classes = 0
+            detection_log: List[str] = []
+
+            for path in class_files:
                 try:
-                    content = class_file.read_bytes()
-                    original_content = content
-
-                    for old_bytes, new_bytes in rules:
-                        content = content.replace(old_bytes, new_bytes)
-
-                    if content != original_content:
-                        class_file.write_bytes(content)
-                        patched_count += 1
-                        rel_path = class_file.relative_to(extract_path).as_posix()
-                        detections.append(f"✓ Patched: {rel_path}")
-                except Exception as e:
-                    rel_path = class_file.relative_to(extract_path).as_posix()
-                    detections.append(f"⚠ Warning - {rel_path}: {str(e)[:60]}")
-
-            # Process resource files
-            resource_files = (
-                list(extract_path.rglob("*.json"))
-                + list(extract_path.rglob("*.properties"))
-                + list(extract_path.rglob("*.xml"))
-            )
-            resources_updated = 0
-
-            for res_file in resource_files:
-                try:
-                    content = res_file.read_text(encoding="utf-8", errors="ignore")
+                    content = path.read_bytes()
                     original = content
+                    for old, new in rules:
+                        content = content.replace(old, new)
+                    if content != original:
+                        path.write_bytes(content)
+                        patched_classes += 1
+                        detection_log.append(f"Patched class: {path.relative_to(extract_path).as_posix()}")
+                except Exception as exc:
+                    detection_log.append(f"Warning class: {path.name}: {str(exc)[:80]}")
 
-                    for old_bytes, new_bytes in rules:
+            # Step 3: update resources
+            resource_files = list(extract_path.rglob("*.json")) + list(extract_path.rglob("*.properties")) + list(extract_path.rglob("*.xml"))
+            resource_updates = 0
+            for res in resource_files:
+                try:
+                    text = res.read_text(encoding="utf-8", errors="ignore")
+                    original = text
+                    for old, new in rules:
                         try:
-                            old_str = old_bytes.decode("utf-8", errors="ignore")
-                            new_str = new_bytes.decode("utf-8", errors="ignore")
-                            content = content.replace(old_str, new_str)
+                            old_str = old.decode("utf-8")
+                            new_str = new.decode("utf-8")
+                            text = text.replace(old_str, new_str)
                         except Exception:
                             pass
+                    if text != original:
+                        res.write_text(text, encoding="utf-8")
+                        resource_updates += 1
+                except Exception:
+                    pass
 
-                    if content != original:
-                        res_file.write_text(content, encoding="utf-8")
-                        resources_updated += 1
-                except Exception as e:
-                    detections.append(f"⚠ Resource warning - {res_file.name}: {str(e)[:60]}")
-
-            # Repackage JAR
+            # Step 4: write final JAR
             output_jar = output_path / f"ported_{jar_file.stem}_v{target_version}.jar"
             with zipfile.ZipFile(output_jar, "w", zipfile.ZIP_DEFLATED) as zf_out:
                 for file in extract_path.rglob("*"):
                     if file.is_file():
                         zf_out.write(file, file.relative_to(extract_path))
 
-            # Generate report
             report = {
-                "status": "success",
                 "source_version": source_version,
                 "target_version": target_version,
-                "input_mod": jar_file.name,
-                "output_mod": output_jar.name,
-                "class_files_total": len(class_files),
-                "class_files_patched": patched_count,
-                "resource_files_updated": resources_updated,
-                "detections": detections,
-                "warnings": [
-                    "This is an automated port. Please test thoroughly.",
-                    "Some mods may require additional manual adjustments.",
-                    "Check the log for any patching issues.",
-                ],
+                "input_jar": jar_file.name,
+                "output_jar": output_jar.name,
+                "patched_classes": patched_classes,
+                "resource_updates": resource_updates,
+                "metadata_fixes": metadata_warnings,
+                "detection_log": detection_log[:200],
+                "status": "completed",
+                "note": "This is a best-effort automated port; complex mods may still require manual fixes."
             }
 
-            report_file = output_path / "porting_report.json"
-            report_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            report_path = output_path / "porting_report.json"
+            report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
             return {
                 "jar_path": str(output_jar),
-                "report_path": str(report_file),
+                "report_path": str(report_path),
                 "report": report,
                 "success": True,
             }

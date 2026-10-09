@@ -2,15 +2,12 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -20,204 +17,140 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.porting_engine import BytecodeReplacer
+from app.porting_engine import AppPortingEngine
 
 
-class ModPorterUI(QMainWindow):
-    """Minecraft Mod Porter - Simple UI for JAR porting."""
+class IndustrialCraftPorterUI(QMainWindow):
+    """Focused UI for Industrial Craft / Forge porting."""
 
     VERSIONS = ["1.12.2", "1.16.5", "1.20.1", "1.21.1", "26.4"]
 
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__()
-        self.setWindowTitle("Minecraft Mod Porter - Fixed")
+        self.setWindowTitle("IndustrialCraft Forge Porting Tool")
         self.resize(1000, 700)
         self.jar_path = ""
-        self.source_version = ""
         self.output_dir = str(Path.cwd() / "output")
 
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
+        layout = QVBoxLayout(central)
 
         form = QFormLayout()
 
-        # JAR selection
         self.jar_display = QPlainTextEdit()
         self.jar_display.setReadOnly(True)
-        self.jar_display.setFixedHeight(50)
-        self.jar_display.setPlaceholderText("No JAR selected")
+        self.jar_display.setFixedHeight(60)
 
-        # Source version
-        self.source_version_label = QLabel("Auto-detect or select")
-        self.source_version_label.setStyleSheet("color: #666; font-style: italic;")
+        self.source_version_combo = QComboBox()
+        self.source_version_combo.addItems(self.VERSIONS)
+        self.source_version_combo.setCurrentText("1.12.2")
 
-        # Target version
-        self.target_version = QComboBox()
-        self.target_version.addItems(self.VERSIONS)
-        self.target_version.setCurrentText("1.20.1")
+        self.target_version_combo = QComboBox()
+        self.target_version_combo.addItems(self.VERSIONS)
+        self.target_version_combo.setCurrentText("1.20.1")
 
-        # Output directory
-        self.output_dir_display = QPlainTextEdit()
-        self.output_dir_display.setReadOnly(True)
-        self.output_dir_display.setFixedHeight(50)
-        self.output_dir_display.setPlainText(self.output_dir)
+        self.output_display = QPlainTextEdit()
+        self.output_display.setReadOnly(True)
+        self.output_display.setFixedHeight(60)
+        self.output_display.setPlainText(self.output_dir)
 
-        form.addRow("Mod JAR:", self.jar_display)
-        form.addRow("Source version:", self.source_version_label)
-        form.addRow("Target version:", self.target_version)
-        form.addRow("Output folder:", self.output_dir_display)
+        form.addRow("JAR mod:", self.jar_display)
+        form.addRow("Source version:", self.source_version_combo)
+        form.addRow("Target version:", self.target_version_combo)
+        form.addRow("Output folder:", self.output_display)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.select_jar_btn = QPushButton("📁 Select JAR")
-        self.select_output_btn = QPushButton("📁 Change output")
-        self.port_btn = QPushButton("🚀 PORT MOD")
-        self.port_btn.setStyleSheet(
-            "background: #28a745; color: white; font-weight: bold; padding: 12px; font-size: 14px; border-radius: 4px;"
-        )
+        btns = QHBoxLayout()
+        self.select_jar_btn = QPushButton("Select JAR")
+        self.output_btn = QPushButton("Select output")
+        self.port_btn = QPushButton("PORT MOD")
+        self.port_btn.setStyleSheet("background: #28a745; color: white; font-weight: bold; padding: 10px;")
 
         self.select_jar_btn.clicked.connect(self.select_jar)
-        self.select_output_btn.clicked.connect(self.select_output)
+        self.output_btn.clicked.connect(self.select_output)
         self.port_btn.clicked.connect(self.run_port)
 
-        btn_layout.addWidget(self.select_jar_btn)
-        btn_layout.addWidget(self.select_output_btn)
-        btn_layout.addWidget(self.port_btn)
+        btns.addWidget(self.select_jar_btn)
+        btns.addWidget(self.output_btn)
+        btns.addWidget(self.port_btn)
 
-        # Log
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setPlainText(
-            "Ready.\n\n"
-            "Step 1: Click 'Select JAR' to load your mod\n"
-            "Step 2: Select target Minecraft version\n"
-            "Step 3: Click 'PORT MOD'\n\n"
-            "Supported migrations:\n"
-            "  1.12.2 → 1.20.1\n"
-            "  1.16.5 → 1.20.1\n"
-            "  1.20.1 → 1.21.1\n\n"
+            "IndustrialCraft Forge Port Tool\n\n"
+            "1. Load a JAR mod\n"
+            "2. Choose source and target Forge versions\n"
+            "3. Click PORT MOD\n\n"
+            "This is a best-effort porting tool for Industrial Craft-like Forge mods.\n"
         )
-        self.log.setStyleSheet("background: #f5f5f5; font-family: monospace; font-size: 10px;")
 
-        main_layout.addLayout(form)
-        main_layout.addLayout(btn_layout)
-        main_layout.addWidget(QLabel("Processing log:"))
-        main_layout.addWidget(self.log)
+        layout.addLayout(form)
+        layout.addLayout(btns)
+        layout.addWidget(QLabel("Log:"))
+        layout.addWidget(self.log)
 
     def log_msg(self, text: str) -> None:
         self.log.appendPlainText(text)
 
     def select_jar(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select Mod JAR", filter="JAR files (*.jar);;All files (*)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select mod JAR", filter="JAR files (*.jar)")
         if file_path:
             self.jar_path = file_path
-            jar_name = Path(file_path).name
-            self.jar_display.setPlainText(jar_name)
-            self.log_msg(f"✓ Loaded: {jar_name}")
-
-            # Try to detect version
-            detected = self.detect_version_from_name(jar_name)
-            if detected:
-                self.source_version = detected
-                self.source_version_label.setText(detected)
-                self.log_msg(f"✓ Detected version: {detected}")
+            self.jar_display.setPlainText(Path(file_path).name)
+            self.log_msg(f"\n✓ JAR selected: {Path(file_path).name}")
 
     def select_output(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
+        folder = QFileDialog.getExistingDirectory(self, "Select output folder")
         if folder:
             self.output_dir = folder
-            self.output_dir_display.setPlainText(folder)
-            self.log_msg(f"✓ Output: {folder}")
-
-    def detect_version_from_name(self, jar_name: str) -> str:
-        """Try to detect Minecraft version from filename."""
-        for version in self.VERSIONS:
-            if version.replace(".", "") in jar_name.replace(".", "").lower():
-                return version
-            if version in jar_name:
-                return version
-        return ""
+            self.output_display.setPlainText(folder)
+            self.log_msg(f"✓ Output directory: {folder}")
 
     def run_port(self) -> None:
         if not self.jar_path:
-            QMessageBox.warning(self, "Error", "Please select a JAR file first.")
+            QMessageBox.warning(self, "Error", "Select a JAR first.")
             return
 
-        # Get source version
-        source_version = self.source_version
-        if not source_version:
-            dlg = QInputDialog(self)
-            dlg.setWindowTitle("Select Source Version")
-            dlg.setLabelText("Source Minecraft/Forge version:")
-            dlg.setComboBoxItems(self.VERSIONS)
-            if dlg.exec() == QInputDialog.Accepted:
-                source_version = dlg.textValue()
-            else:
-                return
-
-        target_version = self.target_version.currentText()
+        source_version = self.source_version_combo.currentText()
+        target_version = self.target_version_combo.currentText()
 
         if source_version == target_version:
             QMessageBox.warning(self, "Error", "Source and target versions are the same.")
             return
 
-        # Check if migration is supported
-        if (source_version, target_version) not in BytecodeReplacer.MIGRATION_RULES:
-            QMessageBox.warning(
-                self,
-                "Unsupported",
-                f"Migration {source_version} → {target_version} is not yet supported.\n\n"
-                f"Supported routes:\n"
-                f"  1.12.2 → 1.20.1\n"
-                f"  1.16.5 → 1.20.1\n"
-                f"  1.20.1 → 1.21.1",
-            )
-            return
-
-        self.log_msg(f"\n{'='*70}")
-        self.log_msg(f"Starting port: {source_version} → {target_version}")
-        self.log_msg(f"Input: {Path(self.jar_path).name}")
-        self.log_msg(f"{'='*70}\n")
+        self.log_msg(f"\n{'='*70}\n")
+        self.log_msg(f"Starting Industrial Craft port: {source_version} -> {target_version}\n")
 
         try:
-            result = BytecodeReplacer.apply_rules(
+            result = AppPortingEngine.port_jar(
                 jar_path=self.jar_path,
                 source_version=source_version,
                 target_version=target_version,
                 output_dir=self.output_dir,
             )
 
-            report = result["report"]
-            self.log_msg(f"✓ PORTING COMPLETED")
-            self.log_msg(f"  Output: {Path(result['jar_path']).name}")
-            self.log_msg(f"  Classes processed: {report['class_files_total']}")
-            self.log_msg(f"  Classes patched: {report['class_files_patched']}")
-            self.log_msg(f"  Resources updated: {report['resource_files_updated']}")
-            self.log_msg(f"\n  Report: {Path(result['report_path']).name}")
+            self.log_msg(f"✓ Output JAR: {result['jar_path']}\n")
+            self.log_msg(f"✓ Report: {result['report_path']}\n")
+            self.log_msg(f"Patched classes: {result['report']['patched_classes']}\n")
+            self.log_msg(f"Resource updates: {result['report']['resource_updates']}\n")
+            self.log_msg(f"Metadata fixes: {len(result['report'].get('metadata_fixes', []))}\n")
+            self.log_msg("\nNOTE: This is best-effort, and complex mods still need manual validation.\n")
             self.log_msg(f"{'='*70}\n")
 
             QMessageBox.information(
                 self,
-                "✓ Success",
-                f"Mod ported successfully!\n\n"
-                f"Output JAR: {Path(result['jar_path']).name}\n\n"
-                f"Please test the mod in-game before distribution.",
+                "Success",
+                f"Porting complete!\n\nOutput: {result['jar_path']}\nReport: {result['report_path']}",
             )
-        except ValueError as ve:
-            self.log_msg(f"✗ ERROR: {str(ve)}")
-            self.log_msg(f"{'='*70}\n")
-            QMessageBox.critical(self, "✗ Error", str(ve))
         except Exception as e:
-            error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
-            self.log_msg(f"✗ ERROR: {error_msg[:200]}")
-            self.log_msg(f"{'='*70}\n")
-            QMessageBox.critical(self, "✗ Critical Error", f"Porting failed:\n{str(e)}")  
+            self.log_msg(f"\n✗ ERROR: {str(e)}\n")
+            self.log_msg(traceback.format_exc()[:500])
+            QMessageBox.critical(self, "Port failed", str(e))
 
 
-def main() -> int:
+def main():
     app = QApplication(sys.argv)
-    window = ModPorterUI()
+    window = IndustrialCraftPorterUI()
     window.show()
     return app.exec()
 
